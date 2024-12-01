@@ -9,6 +9,7 @@ import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 from dotenv import load_dotenv
+import tempfile
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -44,15 +45,15 @@ async def generate_translated_audio(audio_url: str, lang: str, background_tasks:
         response = requests.get(audio_url)
         response.raise_for_status()
 
-        # Save the audio file temporarily
-        uploaded_file = f"uploaded_audio_{random.randint(1000,9999)}.mp3"
-        with open(uploaded_file, "wb") as buffer:
-            buffer.write(response.content)
+        # Create a temporary directory to store the uploaded file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as uploaded_file:
+            uploaded_file.write(response.content)
+            uploaded_file_path = uploaded_file.name
 
         # Perform speech-to-text using Groq Whisper API
-        with open(uploaded_file, "rb") as file:
+        with open(uploaded_file_path, "rb") as file:
             transcription = client.audio.transcriptions.create(
-                file=(uploaded_file, file.read()),
+                file=(uploaded_file.name, file.read()),
                 model="whisper-large-v3",
             )
         speech_to_text = transcription.text
@@ -63,18 +64,19 @@ async def generate_translated_audio(audio_url: str, lang: str, background_tasks:
         translated_text = translation.text
 
         # Generate translated audio using gTTS
-        output_file = f"translated_audio_{random.randint(1000,9999)}.mp3"
-        tts = gTTS(text=translated_text, lang=lang)
-        tts.save(output_file)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as output_file:
+            output_file_path = output_file.name
+            tts = gTTS(text=translated_text, lang=lang)
+            tts.save(output_file_path)
 
         # Add background task to remove the output file after sending the response
-        background_tasks.add_task(remove_file, output_file)
+        background_tasks.add_task(remove_file, output_file_path)
 
         # Clean up the uploaded file immediately
-        os.remove(uploaded_file)
+        os.remove(uploaded_file_path)
 
         # Return the audio file directly to the client
-        return FileResponse(output_file, media_type="audio/mp3", filename=os.path.basename(output_file))
+        return FileResponse(output_file_path, media_type="audio/mp3", filename=os.path.basename(output_file_path))
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
